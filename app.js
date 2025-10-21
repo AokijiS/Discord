@@ -28,7 +28,6 @@ const messageInput = $("#message-input");
 const sendBtn = $("#send-btn");
 const currentRoomEl = $("#current-room");
 const roomOwnerHint = $("#room-owner-hint");
-
 const friendsBtn = $("#friends-btn");
 const friendsDrawer = $("#friends-drawer");
 const closeFriends = $("#close-friends");
@@ -36,6 +35,13 @@ const userListEl = $("#user-list");
 const requestListEl = $("#request-list");
 const friendsListEl = $("#friends-list");
 const badgeRequests = $("#badge-requests");
+
+const newRoomBtn = $("#new-room-btn");
+const roomPopup = $("#room-popup");
+const createBtn = $("#create-room");
+const roomNameInput = $("#room-name");
+const roomPrivate = $("#room-private");
+const friendSelect = $("#friend-select");
 
 let state = {
   user: null,
@@ -47,14 +53,7 @@ let state = {
   lastVisibilityChange: Date.now()
 };
 
-// ===== Anim helpers =====
-function bounce(el) {
-  el.classList.remove("animate-ping");
-  void el.offsetWidth;
-  el.classList.add("animate-ping");
-}
-
-// ===== Notifications (Web Notifications API) =====
+// ===== Notifications =====
 function askNotificationPermission() {
   if (!("Notification" in window)) return;
   if (Notification.permission === "default") {
@@ -109,13 +108,13 @@ function renderAuthArea(user) {
     el.innerHTML = `
       <img src="${user.photoURL || 'https://i.pravatar.cc/40'}" class="h-8 w-8 rounded-full">
       <span class="text-xs text-zinc-400">${user.displayName || user.email}</span>
-      <button id="signout" class="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">Déconnexion</button>
+      <button id="signout" class="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">Quitter</button>
     `;
     $("#signout").onclick = () => signOut(auth);
   }
 }
 
-// ===== Profiles =====
+// ===== Profile =====
 async function ensureUserProfile(user) {
   const ref = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
@@ -129,59 +128,93 @@ async function ensureUserProfile(user) {
   }
 }
 
-// ===== Rooms (public, creator can delete) =====
-const newRoomBtn = $("#new-room-btn");
-newRoomBtn.onclick = async () => {
+// ===== Salons publics & privés =====
+newRoomBtn.onclick = () => {
   if (!state.user) return alert("Connecte-toi d’abord.");
-  const name = prompt("Nom du salon ? (ex: test)");
-  if (!name) return;
-  const id = name.toLowerCase().replace(/[^a-z0-9-_]/g, "-") || crypto.randomUUID().slice(0,8);
-  await setDoc(doc(db, "rooms", id), {
-    name, ownerUid: state.user.uid, createdAt: serverTimestamp()
+  roomPopup.classList.toggle("hidden");
+  friendSelect.classList.add("hidden");
+  roomNameInput.value = "";
+  roomPrivate.checked = false;
+};
+roomPrivate.onchange = () => {
+  if (roomPrivate.checked) {
+    friendSelect.classList.remove("hidden");
+    loadFriendSelection();
+  } else {
+    friendSelect.classList.add("hidden");
+  }
+};
+async function loadFriendSelection() {
+  friendSelect.innerHTML = "";
+  const snap = await getDocs(collection(db, "users", state.user.uid, "friends"));
+  if (snap.empty) {
+    friendSelect.innerHTML = `<div class="text-zinc-500 text-xs italic">Aucun ami</div>`;
+    return;
+  }
+  snap.forEach(async (d) => {
+    const fid = d.id;
+    const u = (await getDoc(doc(db, "users", fid))).data();
+    const line = document.createElement("div");
+    line.innerHTML = `<label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" value="${fid}">
+      <span>${u.displayName}</span>
+    </label>`;
+    friendSelect.appendChild(line);
   });
+}
+createBtn.onclick = async () => {
+  const name = roomNameInput.value.trim() || "sans-nom";
+  const id = crypto.randomUUID().slice(0, 8);
+  const members = [state.user.uid];
+  if (roomPrivate.checked) {
+    friendSelect.querySelectorAll("input[type=checkbox]:checked").forEach(c => members.push(c.value));
+  }
+  await setDoc(doc(db, "rooms", id), {
+    name, ownerUid: state.user.uid,
+    createdAt: serverTimestamp(),
+    private: roomPrivate.checked,
+    members
+  });
+  roomPopup.classList.add("hidden");
 };
 
+// ===== Listen Rooms =====
 function listenRooms() {
   if (state.unsubRooms) state.unsubRooms();
   state.unsubRooms = onSnapshot(collection(db, "rooms"), (snap) => {
     roomListEl.innerHTML = "";
-    const items = [];
-    snap.forEach((d) => items.push({ id: d.id, ...d.data() }));
-    items.sort((a,b)=> (a.name||a.id).localeCompare(b.name||b.id));
-    for (const r of items) {
+    snap.forEach((d) => {
+      const r = d.data();
+      if (r.private && !r.members.includes(state.user.uid)) return;
       const li = document.createElement("li");
-      li.className = "anim-fade-up";
+      li.className = "fadeUp";
       li.innerHTML = `
         <div class="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 transition">
-          <button class="flex-1 text-left" data-join="${r.id}">
-            <div class="text-sm font-medium"># ${r.name || r.id}</div>
-            <div class="text-[11px] text-zinc-500">${r.ownerUid === state.user?.uid ? "Créé par toi" : "Public"}</div>
+          <button class="flex-1 text-left" data-join="${d.id}">
+            <div class="text-sm font-medium"># ${r.name}</div>
+            <div class="text-[11px] text-zinc-500">${r.private ? "Privé" : "Public"}</div>
           </button>
-          ${r.ownerUid === state.user?.uid ? `
-            <button title="Supprimer" data-del="${r.id}" class="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 transition">🗑</button>
-          ` : ""}
+          ${r.ownerUid === state.user?.uid ? `<button data-del="${d.id}" class="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400">🗑</button>` : ""}
         </div>
       `;
-      li.querySelector(`[data-join="${r.id}"]`).onclick = () => joinRoom(r.id, r.name, r.ownerUid);
+      li.querySelector(`[data-join="${d.id}"]`).onclick = () => joinRoom(d.id, r.name, r.ownerUid);
       if (r.ownerUid === state.user?.uid) {
-        li.querySelector(`[data-del="${r.id}"]`).onclick = async () => {
-          if (confirm(`Supprimer le salon #${r.name} ?\n(tout le monde perdra l’historique)`)) {
-            // Firestore Rules empêcheront la suppression si ce n’est pas l’owner
-            await deleteDoc(doc(db, "rooms", r.id));
+        li.querySelector(`[data-del="${d.id}"]`).onclick = async () => {
+          if (confirm(`Supprimer le salon ${r.name}?`)) {
+            await deleteDoc(doc(db, "rooms", d.id));
           }
         };
       }
       roomListEl.appendChild(li);
-    }
+    });
   });
 }
 
+// ===== Join & listen messages =====
 async function joinRoom(roomId, roomName, ownerUid) {
   state.currentRoomId = roomId;
-  currentRoomEl.textContent = roomName || roomId;
-  roomOwnerHint.textContent = ownerUid === state.user?.uid ? "Vous êtes le propriétaire de ce salon" : "";
-
-  // Unsub previous
+  currentRoomEl.textContent = roomName;
+  roomOwnerHint.textContent = ownerUid === state.user?.uid ? "Propriétaire" : "";
   if (state.unsubMessages) state.unsubMessages();
   const q = query(collection(db, "rooms", roomId, "messages"), orderBy("createdAt", "asc"));
   state.unsubMessages = onSnapshot(q, (snap) => {
@@ -189,7 +222,7 @@ async function joinRoom(roomId, roomName, ownerUid) {
     snap.forEach((docSnap) => {
       const m = docSnap.data();
       const row = document.createElement("div");
-      row.className = "flex items-start gap-3 anim-fade-up";
+      row.className = "flex items-start gap-3 fadeUp";
       const avatar = `<img src="${m.user.photoURL}" class="h-8 w-8 rounded-full">`;
       const time = m.createdAt?.toDate ? new Date(m.createdAt.toDate()).toLocaleTimeString() : "";
       row.innerHTML = `
@@ -205,124 +238,45 @@ async function joinRoom(roomId, roomName, ownerUid) {
   });
 }
 
-// ===== Send message =====
+// ===== Send Message =====
 $("#message-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!state.user || !state.currentRoomId) return;
   const text = messageInput.value.trim();
   if (!text) return;
-  sendBtn.disabled = true; setTimeout(()=> sendBtn.disabled=false, 500);
-
+  sendBtn.disabled = true; setTimeout(()=> sendBtn.disabled=false, 400);
   const profile = (await getDoc(doc(db, "users", state.user.uid))).data();
   await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
-    body: text,
-    createdAt: serverTimestamp(),
+    body: text, createdAt: serverTimestamp(),
     roomId: state.currentRoomId,
     user: { uid: state.user.uid, name: profile.displayName, photoURL: profile.photoURL }
   });
   messageInput.value = "";
 });
 
-// ===== Global notifications: messages & friend requests =====
-// (1) Messages (tous salons) → via collectionGroup
+// ===== Notifications =====
 function listenAllMessagesNotifications() {
-  // Écoute tous les messages, notifie si page en arrière-plan et auteur ≠ moi
   const q = query(collectionGroup(db, "messages"), orderBy("createdAt", "desc"));
   onSnapshot(q, (snap) => {
     snap.docChanges().forEach((ch) => {
       if (ch.type !== "added") return;
       const m = ch.doc.data();
-      if (!m?.user?.uid || !state.user) return;
-      if (m.user.uid === state.user.uid) return;
-      // Réduire le bruit : ne notifier que si l’onglet est caché et message récent
+      if (!state.user || m.user.uid === state.user.uid) return;
       const t = m.createdAt?.toDate ? m.createdAt.toDate().getTime() : Date.now();
-      if (document.visibilityState === "hidden" && t >= state.lastVisibilityChange - 2000) {
+      if (document.visibilityState === "hidden" && t >= state.lastVisibilityChange - 3000) {
         notify(`Nouveau message dans #${m.roomId}`, `${m.user.name}: ${m.body}`);
       }
     });
   });
 }
 
-// (2) Friend requests (pour l’utilisateur courant)
-function listenFriendRequests(uid) {
-  if (state.unsubRequests) state.unsubRequests();
-  state.unsubRequests = onSnapshot(collection(db, "users", uid, "friendRequests"), (snap) => {
-    requestListEl.innerHTML = "";
-    const count = snap.size;
-    badgeRequests.textContent = String(count);
-    badgeRequests.classList.toggle("hidden", count === 0);
-    snap.forEach(async (d) => {
-      const fromUid = d.id;
-      const u = (await getDoc(doc(db, "users", fromUid))).data();
-      const li = document.createElement("li");
-      li.className = "anim-fade-up";
-      li.innerHTML = `
-        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800">
-          <img src="${u?.photoURL}" class="h-6 w-6 rounded-full">
-          <div class="flex-1 text-sm">${u?.displayName || fromUid}</div>
-          <button data-accept="${fromUid}" class="text-xs px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 transition">Accepter</button>
-        </div>`;
-      li.querySelector(`[data-accept="${fromUid}"]`).onclick = () => acceptFriendRequest(fromUid);
-      requestListEl.appendChild(li);
-      notify("Nouvelle demande d’ami", `${u?.displayName || "Un utilisateur"} souhaite vous ajouter`);
-    });
-  });
-}
-
-// Friends list
-function listenFriends(uid) {
-  if (state.unsubFriends) state.unsubFriends();
-  state.unsubFriends = onSnapshot(collection(db, "users", uid, "friends"), async (snap) => {
-    friendsListEl.innerHTML = "";
-    for (const d of snap.docs) {
-      const friendUid = d.id;
-      const u = (await getDoc(doc(db, "users", friendUid))).data();
-      const li = document.createElement("li");
-      li.className = "anim-fade-up";
-      li.innerHTML = `
-        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800">
-          <img src="${u?.photoURL}" class="h-6 w-6 rounded-full">
-          <div class="flex-1 text-sm">${u?.displayName || friendUid}</div>
-        </div>`;
-      friendsListEl.appendChild(li);
-    }
-  });
-}
-
-// Friends drawer open/close
-friendsBtn.onclick = () => {
-  friendsDrawer.classList.remove("hidden");
-  askNotificationPermission();
-};
+// ===== Amis =====
+friendsBtn.onclick = () => { friendsDrawer.classList.remove("hidden"); askNotificationPermission(); };
 closeFriends.onclick = () => friendsDrawer.classList.add("hidden");
 
-// Users list to add friends
-function loadAllUsers() {
-  onSnapshot(collection(db, "users"), (snap) => {
-    userListEl.innerHTML = "";
-    snap.forEach((d) => {
-      const u = d.data();
-      if (!u.displayName) return;
-      const li = document.createElement("li");
-      li.className = "anim-fade-up";
-      li.innerHTML = `
-        <div class="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 cursor-pointer transition">
-          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
-          <div class="flex-1 text-sm">${u.displayName}</div>
-          ${u.uid !== state.user?.uid ? `<button data-add="${u.uid}" class="opacity-0 group-hover:opacity-100 text-xs text-indigo-400 hover:underline transition">+ Ami</button>` : ""}
-        </div>`;
-      if (u.uid !== state.user?.uid) {
-        li.querySelector(`[data-add="${u.uid}"]`).onclick = () => sendFriendRequest(u.uid);
-      }
-      userListEl.appendChild(li);
-    });
-  });
-}
-
-// ===== Friends actions =====
 async function sendFriendRequest(targetUid) {
-  if (!state.user) return alert("Connecte-toi d’abord.");
-  if (targetUid === state.user.uid) return alert("Impossible de t’ajouter toi-même 😅");
+  if (!state.user) return alert("Connecte-toi d’abord !");
+  if (targetUid === state.user.uid) return alert("Tu ne peux pas t’ajouter toi-même !");
   await setDoc(doc(db, "users", targetUid, "friendRequests", state.user.uid), {
     from: state.user.uid, sentAt: serverTimestamp()
   });
@@ -335,6 +289,66 @@ async function acceptFriendRequest(fromUid) {
     setDoc(doc(db, "users", fromUid, "friends", me), { since: serverTimestamp() }),
     deleteDoc(doc(db, "users", me, "friendRequests", fromUid))
   ]);
+}
+
+// === UI amis ===
+function loadAllUsers() {
+  onSnapshot(collection(db, "users"), (snap) => {
+    userListEl.innerHTML = "";
+    snap.forEach((d) => {
+      const u = d.data();
+      if (!u.displayName) return;
+      const li = document.createElement("li");
+      li.className = "fadeUp";
+      li.innerHTML = `
+        <div class="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 transition">
+          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
+          <div class="flex-1 text-sm">${u.displayName}</div>
+          ${u.uid !== state.user?.uid ? `<button data-add="${u.uid}" class="opacity-0 group-hover:opacity-100 text-xs text-indigo-400 hover:underline">+ Ami</button>` : ""}
+        </div>`;
+      if (u.uid !== state.user?.uid) li.querySelector(`[data-add="${u.uid}"]`).onclick = () => sendFriendRequest(u.uid);
+      userListEl.appendChild(li);
+    });
+  });
+}
+function listenFriendRequests(uid) {
+  if (state.unsubRequests) state.unsubRequests();
+  state.unsubRequests = onSnapshot(collection(db, "users", uid, "friendRequests"), async (snap) => {
+    requestListEl.innerHTML = "";
+    badgeRequests.textContent = snap.size;
+    badgeRequests.classList.toggle("hidden", snap.size === 0);
+    for (const d of snap.docs) {
+      const u = (await getDoc(doc(db, "users", d.id))).data();
+      const li = document.createElement("li");
+      li.className = "fadeUp";
+      li.innerHTML = `
+        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800">
+          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
+          <div class="flex-1 text-sm">${u.displayName}</div>
+          <button data-acc="${u.uid}" class="px-2 py-1 text-xs bg-indigo-600 rounded">Accepter</button>
+        </div>`;
+      li.querySelector(`[data-acc="${u.uid}"]`).onclick = () => acceptFriendRequest(u.uid);
+      requestListEl.appendChild(li);
+      notify("Nouvelle demande d’ami", `${u.displayName} souhaite t’ajouter`);
+    }
+  });
+}
+function listenFriends(uid) {
+  if (state.unsubFriends) state.unsubFriends();
+  state.unsubFriends = onSnapshot(collection(db, "users", uid, "friends"), async (snap) => {
+    friendsListEl.innerHTML = "";
+    for (const d of snap.docs) {
+      const u = (await getDoc(doc(db, "users", d.id))).data();
+      const li = document.createElement("li");
+      li.className = "fadeUp";
+      li.innerHTML = `
+        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800">
+          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
+          <div class="flex-1 text-sm">${u.displayName}</div>
+        </div>`;
+      friendsListEl.appendChild(li);
+    }
+  });
 }
 
 // ===== Auth flow =====
@@ -350,11 +364,10 @@ onAuthStateChanged(auth, async (u) => {
     listenFriends(u.uid);
     listenAllMessagesNotifications();
   } else {
-    // reset UI
     roomListEl.innerHTML = "";
     messagesEl.innerHTML = "";
+    userListEl.innerHTML = "";
     requestListEl.innerHTML = "";
     friendsListEl.innerHTML = "";
-    badgeRequests.classList.add("hidden");
   }
 });
