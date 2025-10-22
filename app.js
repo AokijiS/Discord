@@ -388,6 +388,7 @@ onAuthStateChanged(auth, async (u) => {
   state.user = u;
   renderAuthArea(u);
   if (u) {
+    renderAuthArea(u);
     askNotificationPermission();
     await ensureUserProfile(u);
     listenRooms();
