@@ -179,6 +179,8 @@ createBtn.onclick = async () => {
 };
 
 // ===== Listen Rooms =====
+console.log("👀 listenRooms() lancé pour:", state.user?.uid);
+console.log("📦 Snapshot reçu:", snap.size, "salons");
 function listenRooms() {
   if (state.unsubRooms) state.unsubRooms();
   
