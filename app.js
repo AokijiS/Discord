@@ -270,21 +270,44 @@ async function joinRoom(roomId, roomName, ownerUid) {
   });
 }
 
-// ===== Send Message =====
+// ===== Envoi de message =====
 $("#message-form").addEventListener("submit", async (e) => {
   e.preventDefault();
+
   if (!state.user || !state.currentRoomId) return;
+
   const text = messageInput.value.trim();
   if (!text) return;
-  sendBtn.disabled = true; setTimeout(()=> sendBtn.disabled=false, 400);
-  const profile = (await getDoc(doc(db, "users", state.user.uid))).data();
-  await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
-    body: text, createdAt: serverTimestamp(),
-    roomId: state.currentRoomId,
-    user: { uid: state.user.uid, name: profile.displayName, photoURL: profile.photoURL }
-  });
-  messageInput.value = "";
+
+  sendBtn.disabled = true;
+  setTimeout(() => sendBtn.disabled = false, 400);
+
+  try {
+    // On lit le profil depuis le cache (pas Firestore à chaque fois)
+    const profile = state.profile || 
+      (await getDoc(doc(db, "users", state.user.uid))).data();
+
+    // On nettoie le message pour éviter les injections HTML
+    const sanitized = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+    await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
+      body: sanitized,
+      createdAt: serverTimestamp(),
+      roomId: state.currentRoomId,
+      user: {
+        uid: state.user.uid,
+        name: profile.displayName || state.user.displayName || state.user.email,
+        photoURL: profile.photoURL || state.user.photoURL || "https://i.pravatar.cc/40"
+      }
+    });
+
+    messageInput.value = "";
+  } catch (err) {
+    console.error("Erreur envoi message:", err);
+    alert("Erreur : " + err.message);
+  }
 });
+;
 
 // ===== Notifications =====
 function listenAllMessagesNotifications() {
