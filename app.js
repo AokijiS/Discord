@@ -243,9 +243,11 @@ function listenRooms() {
 
 
 // ===== Join & listen messages =====
+
 async function joinRoom(roomId, roomName, ownerUid) {
   state.currentRoomId = roomId;
-  currentRoomEl.textContent = roomName;
+  currentRoomEl.textContent = roomName  || roomId;
+  await ensureMessagesSubcollection(roomId);
   roomOwnerHint.textContent = ownerUid === state.user?.uid ? "Propriétaire" : "";
   if (state.unsubMessages) state.unsubMessages();
   const q = query(collection(db, "rooms", roomId, "messages"), orderBy("createdAt", "asc"));
@@ -427,3 +429,51 @@ onAuthStateChanged(auth, async (u) => {
     friendsListEl.innerHTML = "";
   }
 });
+
+
+// === Crée une sous-collection messages dans un salon si elle n'existe pas ===
+async function ensureMessagesSubcollection(roomId) {
+  const roomRef = collection(db, "rooms", roomId, "messages");
+
+  try {
+    // On ajoute un message "système" temporaire uniquement si vide
+    const snap = await getDocs(roomRef);
+    if (snap.empty) {
+      await addDoc(roomRef, {
+        body: "Salon initialisé automatiquement ✅",
+        createdAt: serverTimestamp(),
+        roomId,
+        user: {
+          uid: "system",
+          name: "Bot Système",
+          photoURL: "https://i.pravatar.cc/40?u=system"
+        }
+      });
+      console.log(`🟢 Sous-collection 'messages' créée pour ${roomId}`);
+    } else {
+      console.log(`✅ Sous-collection 'messages' déjà existante pour ${roomId}`);
+    }
+  } catch (err) {
+    console.error("❌ Erreur création sous-collection messages:", err);
+  }
+}
+
+
+async function createRandomCollection() {
+  const randomName = "test_" + Math.random().toString(36).substring(2, 8);
+  const docRef = doc(db, "rooms", randomName);
+  await setDoc(docRef, {
+    name: randomName,
+    ownerUid: state.user?.uid || "system",
+    createdAt: serverTimestamp(),
+    private: false,
+    members: [state.user?.uid || "system"]
+  });
+  await addDoc(collection(db, "rooms", randomName, "messages"), {
+    body: "Premier message automatique",
+    createdAt: serverTimestamp(),
+    roomId: randomName,
+    user: { uid: "system", name: "Bot", photoURL: "https://i.pravatar.cc/40?u=bot" }
+  });
+  console.log(`✅ Salon '${randomName}' + sous-collection 'messages' créés !`);
+}
