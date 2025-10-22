@@ -273,14 +273,13 @@ async function joinRoom(roomId, roomName, ownerUid) {
 }
 
 // ===== Envoi de message =====
-const text = messageInput.value.trim();
-
 
 $("#message-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  console.log("Message tapé:", text);
+
 
   if (!state.user || !state.currentRoomId) return;
+  const text = messageInput.value.trim();
 
 
   if (!text) return;
