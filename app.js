@@ -181,34 +181,65 @@ createBtn.onclick = async () => {
 // ===== Listen Rooms =====
 function listenRooms() {
   if (state.unsubRooms) state.unsubRooms();
-  state.unsubRooms = onSnapshot(collection(db, "rooms"), (snap) => {
+  
+  const roomsRef = collection(db, "rooms");
+  state.unsubRooms = onSnapshot(roomsRef, (snap) => {
+    // Si pas connecté, on n'affiche rien
+    if (!state.user) {
+      roomListEl.innerHTML = "<div class='text-sm text-zinc-500 px-3'>Connecte-toi pour voir les salons</div>";
+      return;
+    }
+
+    // Réinitialise la liste
     roomListEl.innerHTML = "";
-    snap.forEach((d) => {
-      const r = d.data();
-      if (r.private && !r.members.includes(state.user.uid)) return;
+
+    if (snap.empty) {
+      roomListEl.innerHTML = "<div class='text-sm text-zinc-500 px-3 italic'>Aucun salon pour le moment</div>";
+      return;
+    }
+
+    snap.forEach((docSnap) => {
+      const r = docSnap.data();
+      const roomId = docSnap.id;
+
+      // Vérifie la visibilité
+      const isMember = Array.isArray(r.members) && r.members.includes(state.user.uid);
+      const visible = !r.private || isMember;
+      if (!visible) return;
+
       const li = document.createElement("li");
       li.className = "fadeUp";
       li.innerHTML = `
         <div class="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 transition">
-          <button class="flex-1 text-left" data-join="${d.id}">
+          <button class="flex-1 text-left" data-join="${roomId}">
             <div class="text-sm font-medium"># ${r.name}</div>
             <div class="text-[11px] text-zinc-500">${r.private ? "Privé" : "Public"}</div>
           </button>
-          ${r.ownerUid === state.user?.uid ? `<button data-del="${d.id}" class="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400">🗑</button>` : ""}
+          ${r.ownerUid === state.user.uid ? `
+            <button data-del="${roomId}" class="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 transition">🗑</button>
+          ` : ""}
         </div>
       `;
-      li.querySelector(`[data-join="${d.id}"]`).onclick = () => joinRoom(d.id, r.name, r.ownerUid);
-      if (r.ownerUid === state.user?.uid) {
-        li.querySelector(`[data-del="${d.id}"]`).onclick = async () => {
-          if (confirm(`Supprimer le salon ${r.name}?`)) {
-            await deleteDoc(doc(db, "rooms", d.id));
+
+      // Rejoindre le salon
+      li.querySelector(`[data-join="${roomId}"]`).onclick = () => joinRoom(roomId, r.name, r.ownerUid);
+
+      // Supprimer (si owner)
+      if (r.ownerUid === state.user.uid) {
+        li.querySelector(`[data-del="${roomId}"]`).onclick = async () => {
+          if (confirm(`Supprimer le salon "${r.name}" ?`)) {
+            await deleteDoc(doc(db, "rooms", roomId));
           }
         };
       }
+
       roomListEl.appendChild(li);
     });
+  }, (err) => {
+    console.error("Erreur snapshot rooms:", err);
   });
 }
+
 
 // ===== Join & listen messages =====
 async function joinRoom(roomId, roomName, ownerUid) {
