@@ -5,7 +5,7 @@ import {
   updateProfile, createUserWithEmailAndPassword, signInWithEmailAndPassword
 } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-auth.js";
 import {
-  getFirestore, collection, collectionGroup, doc, addDoc, setDoc, getDoc, getDocs,
+  getFirestore, collection, collectionGroup, doc, addDoc, setDoc, getDoc, getDocs, updateDoc,
   onSnapshot, serverTimestamp, query, orderBy, deleteDoc
 } from "https://www.gstatic.com/firebasejs/10.14.0/firebase-firestore.js";
 
@@ -22,19 +22,13 @@ const db = getFirestore(app);
 
 // ==== DOM helpers ====
 const $ = (s) => document.querySelector(s);
-const messagesEl = $("#messages");
 const roomListEl = $("#room-list");
+const messagesEl = $("#messages");
+const messageForm = $("#message-form");
 const messageInput = $("#message-input");
 const sendBtn = $("#send-btn");
 const currentRoomEl = $("#current-room");
 const roomOwnerHint = $("#room-owner-hint");
-const friendsBtn = $("#friends-btn");
-const friendsDrawer = $("#friends-drawer");
-const closeFriends = $("#close-friends");
-const userListEl = $("#user-list");
-const requestListEl = $("#request-list");
-const friendsListEl = $("#friends-list");
-const badgeRequests = $("#badge-requests");
 
 const newRoomBtn = $("#new-room-btn");
 const roomPopup = $("#room-popup");
@@ -43,21 +37,34 @@ const roomNameInput = $("#room-name");
 const roomPrivate = $("#room-private");
 const friendSelect = $("#friend-select");
 
+// (facultatif si tu as le panneau amis dans ton HTML)
+// const friendsBtn = $("#friends-btn");
+// const friendsDrawer = $("#friends-drawer");
+// const closeFriends = $("#close-friends");
+// const userListEl = $("#user-list");
+// const requestListEl = $("#request-list");
+// const friendsListEl = $("#friends-list");
+// const badgeRequests = $("#badge-requests");
+
+// ==== State global ====
 let state = {
   user: null,
+  profile: null,          // cache du profil { displayName, photoURL, ... }
   currentRoomId: null,
-  unsubMessages: null,
   unsubRooms: null,
-  unsubRequests: null,
-  unsubFriends: null,
+  unsubMessages: null,
   lastVisibilityChange: Date.now()
 };
 
-// ===== Notifications =====
+// ==== Utils ====
+const sanitize = (s) => s.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const smoothScrollBottom = (el) => el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+
+// Notifications (onglet en arrière-plan)
 function askNotificationPermission() {
   if (!("Notification" in window)) return;
   if (Notification.permission === "default") {
-    Notification.requestPermission().catch(()=>{});
+    Notification.requestPermission().catch(() => {});
   }
 }
 function notify(title, body) {
@@ -70,9 +77,11 @@ document.addEventListener("visibilitychange", () => {
   state.lastVisibilityChange = Date.now();
 });
 
-// ===== Auth UI =====
+// ==== Auth UI ====
 function renderAuthArea(user) {
   const el = $("#auth-area");
+  if (!el) return;
+
   if (!user) {
     el.innerHTML = `
       <div class="flex items-center gap-2">
@@ -91,7 +100,7 @@ function renderAuthArea(user) {
       </div>
     `;
     $("#signin-google").onclick = async () => {
-      try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch(e){ alert(e.message); }
+      try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (e) { alert(e.message); }
     };
     const f = $("#email-form");
     f.onsubmit = async (ev) => {
@@ -106,7 +115,7 @@ function renderAuthArea(user) {
     };
   } else {
     el.innerHTML = `
-      <img src="${user.photoURL || 'https://i.pravatar.cc/40'}" class="h-8 w-8 rounded-full">
+      <img src="${user.photoURL || 'https://i.pravatar.cc/40'}" class="h-8 w-8 rounded-full" />
       <span class="text-xs text-zinc-400">${user.displayName || user.email}</span>
       <button id="signout" class="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">Quitter</button>
     `;
@@ -114,7 +123,7 @@ function renderAuthArea(user) {
   }
 }
 
-// ===== Profile =====
+// ==== Profil utilisateur ====
 async function ensureUserProfile(user) {
   const ref = doc(db, "users", user.uid);
   const snap = await getDoc(ref);
@@ -122,155 +131,216 @@ async function ensureUserProfile(user) {
     const pseudo = prompt("Choisis ton pseudo :") || user.displayName || "Utilisateur";
     const photo = user.photoURL || `https://api.dicebear.com/7.x/identicon/svg?seed=${encodeURIComponent(pseudo)}`;
     await setDoc(ref, {
-      uid: user.uid, displayName: pseudo, photoURL: photo, createdAt: serverTimestamp()
+      uid: user.uid,
+      displayName: pseudo,
+      photoURL: photo,
+      createdAt: serverTimestamp(),
     });
     await updateProfile(user, { displayName: pseudo, photoURL: photo });
+    state.profile = { displayName: pseudo, photoURL: photo, uid: user.uid };
+  } else {
+    const data = snap.data();
+    state.profile = { displayName: data.displayName, photoURL: data.photoURL, uid: user.uid };
   }
 }
 
-// ===== Salons publics & privés =====
-newRoomBtn.onclick = () => {
+// ==== Salon global (test) ====
+async function ensureGlobalRoom() {
+  const ref = doc(db, "rooms", "global");
+  const snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref, {
+      name: "test",
+      ownerUid: "system",
+      createdAt: serverTimestamp(),
+      private: false,
+      members: [] // public → lecture/écriture autorisées selon rules
+    });
+  } else {
+    // normaliser d'anciens docs incomplets
+    const r = snap.data();
+    const fix = {};
+    if (!("private" in r)) fix.private = false;
+    if (!("members" in r)) fix.members = [];
+    if (Object.keys(fix).length) await updateDoc(ref, fix);
+  }
+}
+
+// ==== Création de salon (public/privé avec amis) ====
+newRoomBtn?.addEventListener("click", () => {
   if (!state.user) return alert("Connecte-toi d’abord.");
-  roomPopup.classList.toggle("hidden");
-  friendSelect.classList.add("hidden");
+  roomPopup?.classList.toggle("hidden");
+  friendSelect?.classList.add("hidden");
   roomNameInput.value = "";
   roomPrivate.checked = false;
-};
-roomPrivate.onchange = () => {
+});
+
+roomPrivate?.addEventListener("change", () => {
   if (roomPrivate.checked) {
     friendSelect.classList.remove("hidden");
     loadFriendSelection();
   } else {
     friendSelect.classList.add("hidden");
   }
-};
+});
+
 async function loadFriendSelection() {
-  friendSelect.innerHTML = "";
-  const snap = await getDocs(collection(db, "users", state.user.uid, "friends"));
-  if (snap.empty) {
-    friendSelect.innerHTML = `<div class="text-zinc-500 text-xs italic">Aucun ami</div>`;
-    return;
+  if (!friendSelect) return;
+  friendSelect.innerHTML = "<div class='text-xs text-zinc-500'>Chargement…</div>";
+  try {
+    const snap = await getDocs(collection(db, "users", state.user.uid, "friends"));
+    if (snap.empty) {
+      friendSelect.innerHTML = `<div class="text-zinc-500 text-xs italic">Aucun ami</div>`;
+      return;
+    }
+    friendSelect.innerHTML = "";
+    for (const d of snap.docs) {
+      const fid = d.id;
+      const u = (await getDoc(doc(db, "users", fid))).data();
+      const line = document.createElement("div");
+      line.innerHTML = `<label class="flex items-center gap-2 cursor-pointer">
+        <input type="checkbox" value="${fid}">
+        <span>${u.displayName}</span>
+      </label>`;
+      friendSelect.appendChild(line);
+    }
+  } catch (e) {
+    friendSelect.innerHTML = `<div class='text-red-500 text-xs'>Erreur: ${e.message}</div>`;
   }
-  snap.forEach(async (d) => {
-    const fid = d.id;
-    const u = (await getDoc(doc(db, "users", fid))).data();
-    const line = document.createElement("div");
-    line.innerHTML = `<label class="flex items-center gap-2 cursor-pointer">
-      <input type="checkbox" value="${fid}">
-      <span>${u.displayName}</span>
-    </label>`;
-    friendSelect.appendChild(line);
-  });
 }
-createBtn.onclick = async () => {
+
+createBtn?.addEventListener("click", async () => {
+  if (!state.user) return alert("Connecte-toi d’abord !");
   const name = roomNameInput.value.trim() || "sans-nom";
   const id = crypto.randomUUID().slice(0, 8);
-  const members = [state.user.uid];
+  const members = [state.user.uid]; // le créateur est toujours membre
+
   if (roomPrivate.checked) {
-    friendSelect.querySelectorAll("input[type=checkbox]:checked").forEach(c => members.push(c.value));
+    const selected = [...friendSelect.querySelectorAll("input[type=checkbox]:checked")].map(c => c.value);
+    if (selected.length === 0) {
+      alert("Sélectionne au moins un ami pour créer un salon privé.");
+      return;
+    }
+    members.push(...selected);
   }
-  await setDoc(doc(db, "rooms", id), {
-    name, ownerUid: state.user.uid,
-    createdAt: serverTimestamp(),
-    private: roomPrivate.checked,
-    members
-  });
-  roomPopup.classList.add("hidden");
-};
 
-// ===== Listen Rooms =====
+  try {
+    await setDoc(doc(db, "rooms", id), {
+      name,
+      ownerUid: state.user.uid,
+      createdAt: serverTimestamp(),
+      private: !!roomPrivate.checked,
+      members
+    });
+    roomPopup.classList.add("hidden");
+  } catch (e) {
+    alert("Erreur création du salon: " + e.message);
+  }
+});
 
+// ==== Liste des salons ====
 function listenRooms() {
   if (state.unsubRooms) state.unsubRooms();
-  
+
   const roomsRef = collection(db, "rooms");
   state.unsubRooms = onSnapshot(roomsRef, (snap) => {
-    // Si pas connecté, on n'affiche rien
-    if (!state.user) {
-      roomListEl.innerHTML = "<div class='text-sm text-zinc-500 px-3'>Connecte-toi pour voir les salons</div>";
-      return;
-    }
-
-    // Réinitialise la liste
     roomListEl.innerHTML = "";
-
     if (snap.empty) {
-      roomListEl.innerHTML = "<div class='text-sm text-zinc-500 px-3 italic'>Aucun salon pour le moment</div>";
+      roomListEl.innerHTML = "<div class='text-sm text-zinc-500 px-3 italic'>Aucun salon trouvé</div>";
       return;
     }
 
-    snap.forEach((docSnap) => {
-      const r = docSnap.data();
-      const roomId = docSnap.id;
+    const items = [];
+    snap.forEach((docSnap) => items.push({ id: docSnap.id, ...docSnap.data() }));
 
-      // Vérifie la visibilité
-      const isMember = Array.isArray(r.members) && r.members.includes(state.user.uid);
+    // Tri par nom
+    items.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+
+    for (const r of items) {
+      // visibilité : public pour tous, privé seulement si membre
+      const isMember = Array.isArray(r.members) && state.user && r.members.includes(state.user.uid);
       const visible = !r.private || isMember;
-      if (!visible) return;
+      if (!visible) continue;
 
       const li = document.createElement("li");
       li.className = "fadeUp";
       li.innerHTML = `
         <div class="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 transition">
-          <button class="flex-1 text-left" data-join="${roomId}">
-            <div class="text-sm font-medium"># ${r.name}</div>
+          <button class="flex-1 text-left" data-join="${r.id}">
+            <div class="text-sm font-medium"># ${r.name || r.id}</div>
             <div class="text-[11px] text-zinc-500">${r.private ? "Privé" : "Public"}</div>
           </button>
-          ${r.ownerUid === state.user.uid ? `
-            <button data-del="${roomId}" class="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 transition">🗑</button>
+          ${r.ownerUid === state.user?.uid ? `
+            <button data-del="${r.id}" class="opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-400 transition">🗑</button>
           ` : ""}
         </div>
       `;
-
-      // Rejoindre le salon
-      li.querySelector(`[data-join="${roomId}"]`).onclick = () => joinRoom(roomId, r.name, r.ownerUid);
-
-      // Supprimer (si owner)
-      if (r.ownerUid === state.user.uid) {
-        li.querySelector(`[data-del="${roomId}"]`).onclick = async () => {
+      li.querySelector(`[data-join="${r.id}"]`).onclick = () => joinRoom(r.id, r.name, r.ownerUid);
+      if (r.ownerUid === state.user?.uid) {
+        li.querySelector(`[data-del="${r.id}"]`).onclick = async () => {
           if (confirm(`Supprimer le salon "${r.name}" ?`)) {
-            await deleteDoc(doc(db, "rooms", roomId));
+            try { await deleteDoc(doc(db, "rooms", r.id)); } catch (e) { alert(e.message); }
           }
         };
       }
-
       roomListEl.appendChild(li);
-    });
+    }
+
+    if (!roomListEl.children.length) {
+      roomListEl.innerHTML = "<div class='text-sm text-zinc-500 px-3 italic'>Aucun salon visible</div>";
+    }
   }, (err) => {
-    console.error("Erreur snapshot rooms:", err);
+    console.error("❌ Erreur snapshot rooms:", err);
+    roomListEl.innerHTML = `<div class="text-red-500 text-sm p-3">Erreur Firestore: ${err.message}</div>`;
   });
 }
 
-
-// ===== Join & listen messages =====
+// ==== Rejoindre un salon & écouter ses messages ====
 async function joinRoom(roomId, roomName, ownerUid) {
   state.currentRoomId = roomId;
-  currentRoomEl.textContent = roomName;
+  currentRoomEl.textContent = roomName || roomId;
   roomOwnerHint.textContent = ownerUid === state.user?.uid ? "Propriétaire" : "";
+  localStorage.setItem("lastRoom", roomId);
+
+  // stop ancien listener
   if (state.unsubMessages) state.unsubMessages();
+
+  // feedback UI
+  messagesEl.innerHTML = "<div class='text-zinc-500 text-sm p-3 italic'>Chargement des messages…</div>";
+
   const q = query(collection(db, "rooms", roomId, "messages"), orderBy("createdAt", "asc"));
   state.unsubMessages = onSnapshot(q, (snap) => {
     messagesEl.innerHTML = "";
+    if (snap.empty) {
+      messagesEl.innerHTML = "<div class='text-zinc-500 text-sm p-3 italic'>Aucun message (encore)</div>";
+      return;
+    }
     snap.forEach((docSnap) => {
       const m = docSnap.data();
       const row = document.createElement("div");
       row.className = "flex items-start gap-3 fadeUp";
-      const avatar = `<img src="${m.user.photoURL}" class="h-8 w-8 rounded-full">`;
       const time = m.createdAt?.toDate ? new Date(m.createdAt.toDate()).toLocaleTimeString() : "";
       row.innerHTML = `
-        ${avatar}
-        <div class="bg-zinc-800 rounded-2xl px-4 py-2 max-w-[85%] transition">
+        <img src="${m.user.photoURL}" class="h-8 w-8 rounded-full" />
+        <div class="bg-zinc-800 rounded-2xl px-4 py-2 max-w-[85%]">
           <div class="text-xs text-zinc-400">${m.user.name} • ${time}</div>
-          <div class="text-sm whitespace-pre-wrap break-words">${m.body}</div>
+          <div class="text-sm whitespace-pre-wrap break-words">${sanitize(m.body)}</div>
         </div>
       `;
       messagesEl.appendChild(row);
     });
-    messagesEl.scrollTop = messagesEl.scrollHeight;
+    smoothScrollBottom(messagesEl);
+  }, (err) => {
+    console.error("❌ Erreur snapshot messages:", err);
+    messagesEl.innerHTML = `<div class="text-red-500 text-sm p-3">Erreur Firestore: ${err.message}</div>`;
   });
 }
 
-// === Envoi de message ===
+// ==== Envoi d'un message (UN SEUL handler) ====
+messageInput.addEventListener("input", () => {
+  sendBtn.disabled = messageInput.value.trim().length === 0;
+});
+
 messageForm.onsubmit = async (e) => {
   e.preventDefault();
   const text = messageInput.value.trim();
@@ -282,21 +352,21 @@ messageForm.onsubmit = async (e) => {
   }
 
   sendBtn.disabled = true;
-  setTimeout(() => sendBtn.disabled = false, 400);
+  setTimeout(() => (sendBtn.disabled = false), 400);
 
   try {
     const me = state.user;
-    const profile = {
-      uid: me.uid,
-      name: me.displayName || me.email,
-      photoURL: me.photoURL || "https://i.pravatar.cc/40"
+    const profile = state.profile || {
+      displayName: me.displayName || me.email,
+      photoURL: me.photoURL || "https://i.pravatar.cc/40",
+      uid: me.uid
     };
 
     await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
-      body: text,
+      body: sanitize(text),
       createdAt: serverTimestamp(),
       roomId: state.currentRoomId,
-      user: profile
+      user: { uid: profile.uid, name: profile.displayName, photoURL: profile.photoURL }
     });
 
     messageInput.value = "";
@@ -307,122 +377,50 @@ messageForm.onsubmit = async (e) => {
   }
 };
 
-
-// ===== Notifications =====
+// ==== Notifications (nouveaux messages) globales ====
 function listenAllMessagesNotifications() {
   const q = query(collectionGroup(db, "messages"), orderBy("createdAt", "desc"));
   onSnapshot(q, (snap) => {
     snap.docChanges().forEach((ch) => {
       if (ch.type !== "added") return;
       const m = ch.doc.data();
-      if (!state.user || m.user.uid === state.user.uid) return;
+      if (!state.user || m.user?.uid === state.user.uid) return;
       const t = m.createdAt?.toDate ? m.createdAt.toDate().getTime() : Date.now();
       if (document.visibilityState === "hidden" && t >= state.lastVisibilityChange - 3000) {
-        notify(`Nouveau message dans #${m.roomId}`, `${m.user.name}: ${m.body}`);
+        notify(`Nouveau message`, `${m.user?.name || "Quelqu’un"}: ${m.body}`);
       }
     });
   });
 }
 
-// ===== Amis =====
-friendsBtn.onclick = () => { friendsDrawer.classList.remove("hidden"); askNotificationPermission(); };
-closeFriends.onclick = () => friendsDrawer.classList.add("hidden");
-
-async function sendFriendRequest(targetUid) {
-  if (!state.user) return alert("Connecte-toi d’abord !");
-  if (targetUid === state.user.uid) return alert("Tu ne peux pas t’ajouter toi-même !");
-  await setDoc(doc(db, "users", targetUid, "friendRequests", state.user.uid), {
-    from: state.user.uid, sentAt: serverTimestamp()
-  });
-  alert("Demande envoyée !");
-}
-async function acceptFriendRequest(fromUid) {
-  const me = state.user.uid;
-  await Promise.all([
-    setDoc(doc(db, "users", me, "friends", fromUid), { since: serverTimestamp() }),
-    setDoc(doc(db, "users", fromUid, "friends", me), { since: serverTimestamp() }),
-    deleteDoc(doc(db, "users", me, "friendRequests", fromUid))
-  ]);
-}
-
-// === UI amis ===
-function loadAllUsers() {
-  onSnapshot(collection(db, "users"), (snap) => {
-    userListEl.innerHTML = "";
-    snap.forEach((d) => {
-      const u = d.data();
-      if (!u.displayName) return;
-      const li = document.createElement("li");
-      li.className = "fadeUp";
-      li.innerHTML = `
-        <div class="group flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800 transition">
-          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
-          <div class="flex-1 text-sm">${u.displayName}</div>
-          ${u.uid !== state.user?.uid ? `<button data-add="${u.uid}" class="opacity-0 group-hover:opacity-100 text-xs text-indigo-400 hover:underline">+ Ami</button>` : ""}
-        </div>`;
-      if (u.uid !== state.user?.uid) li.querySelector(`[data-add="${u.uid}"]`).onclick = () => sendFriendRequest(u.uid);
-      userListEl.appendChild(li);
-    });
-  });
-}
-function listenFriendRequests(uid) {
-  if (state.unsubRequests) state.unsubRequests();
-  state.unsubRequests = onSnapshot(collection(db, "users", uid, "friendRequests"), async (snap) => {
-    requestListEl.innerHTML = "";
-    badgeRequests.textContent = snap.size;
-    badgeRequests.classList.toggle("hidden", snap.size === 0);
-    for (const d of snap.docs) {
-      const u = (await getDoc(doc(db, "users", d.id))).data();
-      const li = document.createElement("li");
-      li.className = "fadeUp";
-      li.innerHTML = `
-        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800">
-          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
-          <div class="flex-1 text-sm">${u.displayName}</div>
-          <button data-acc="${u.uid}" class="px-2 py-1 text-xs bg-indigo-600 rounded">Accepter</button>
-        </div>`;
-      li.querySelector(`[data-acc="${u.uid}"]`).onclick = () => acceptFriendRequest(u.uid);
-      requestListEl.appendChild(li);
-      notify("Nouvelle demande d’ami", `${u.displayName} souhaite t’ajouter`);
-    }
-  });
-}
-function listenFriends(uid) {
-  if (state.unsubFriends) state.unsubFriends();
-  state.unsubFriends = onSnapshot(collection(db, "users", uid, "friends"), async (snap) => {
-    friendsListEl.innerHTML = "";
-    for (const d of snap.docs) {
-      const u = (await getDoc(doc(db, "users", d.id))).data();
-      const li = document.createElement("li");
-      li.className = "fadeUp";
-      li.innerHTML = `
-        <div class="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-zinc-800">
-          <img src="${u.photoURL}" class="h-6 w-6 rounded-full">
-          <div class="flex-1 text-sm">${u.displayName}</div>
-        </div>`;
-      friendsListEl.appendChild(li);
-    }
-  });
-}
-
-// ===== Auth flow =====
+// ==== Auth flow ====
 onAuthStateChanged(auth, async (u) => {
   state.user = u;
   renderAuthArea(u);
+
   if (u) {
-    renderAuthArea(u);
     askNotificationPermission();
     await ensureUserProfile(u);
-    listenRooms();
-    loadAllUsers();
-    listenFriendRequests(u.uid);
-    listenFriends(u.uid);
+    await ensureGlobalRoom();     // on s'assure que "test" existe
+    listenRooms();                // afficher salons
+    // restaurer dernier salon si dispo
+    const last = localStorage.getItem("lastRoom");
+    if (last) {
+      // on essaie d’en déduire le nom (sinon id)
+      const snap = await getDoc(doc(db, "rooms", last));
+      const name = snap.exists() ? (snap.data().name || last) : last;
+      joinRoom(last, name, snap.data()?.ownerUid);
+    }
     listenAllMessagesNotifications();
   } else {
+    // reset UI
+    if (state.unsubRooms) state.unsubRooms();
+    if (state.unsubMessages) state.unsubMessages();
     roomListEl.innerHTML = "";
     messagesEl.innerHTML = "";
-    userListEl.innerHTML = "";
-    requestListEl.innerHTML = "";
-    friendsListEl.innerHTML = "";
+    currentRoomEl.textContent = "(aucun)";
+    roomOwnerHint.textContent = "";
   }
 });
+// ==== Initial setup ====
+renderAuthArea(null); // par défaut pas connecté  
