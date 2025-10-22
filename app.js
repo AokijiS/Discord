@@ -285,6 +285,28 @@ $("#message-form").addEventListener("submit", async (e) => {
   });
   messageInput.value = "";
 });
+messageForm.onsubmit = async (e) => {
+  e.preventDefault();
+  const text = messageInput.value.trim();
+  if (!text) return;
+
+  const me = state.user;
+  if (!me || !state.currentRoomId) return;
+
+  await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
+    body: text,
+    createdAt: serverTimestamp(),
+    roomId: state.currentRoomId,
+    user: {
+      uid: me.uid,
+      name: me.displayName || me.email,
+      photoURL: me.photoURL || "https://i.pravatar.cc/40"
+    }
+  });
+
+  messageInput.value = "";
+};
+
 
 // ===== Notifications =====
 function listenAllMessagesNotifications() {
