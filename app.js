@@ -270,41 +270,41 @@ async function joinRoom(roomId, roomName, ownerUid) {
   });
 }
 
-// ===== Send Message =====
-$("#message-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!state.user || !state.currentRoomId) return;
-  const text = messageInput.value.trim();
-  if (!text) return;
-  sendBtn.disabled = true; setTimeout(()=> sendBtn.disabled=false, 400);
-  const profile = (await getDoc(doc(db, "users", state.user.uid))).data();
-  await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
-    body: text, createdAt: serverTimestamp(),
-    roomId: state.currentRoomId,
-    user: { uid: state.user.uid, name: profile.displayName, photoURL: profile.photoURL }
-  });
-  messageInput.value = "";
-});
+// === Envoi de message ===
 messageForm.onsubmit = async (e) => {
   e.preventDefault();
   const text = messageInput.value.trim();
   if (!text) return;
 
-  const me = state.user;
-  if (!me || !state.currentRoomId) return;
+  if (!state.user || !state.currentRoomId) {
+    alert("Sélectionne d’abord un salon !");
+    return;
+  }
 
-  await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
-    body: text,
-    createdAt: serverTimestamp(),
-    roomId: state.currentRoomId,
-    user: {
+  sendBtn.disabled = true;
+  setTimeout(() => sendBtn.disabled = false, 400);
+
+  try {
+    const me = state.user;
+    const profile = {
       uid: me.uid,
       name: me.displayName || me.email,
       photoURL: me.photoURL || "https://i.pravatar.cc/40"
-    }
-  });
+    };
 
-  messageInput.value = "";
+    await addDoc(collection(db, "rooms", state.currentRoomId, "messages"), {
+      body: text,
+      createdAt: serverTimestamp(),
+      roomId: state.currentRoomId,
+      user: profile
+    });
+
+    messageInput.value = "";
+    messageInput.focus();
+  } catch (err) {
+    console.error("Erreur envoi message:", err);
+    alert("Erreur : " + err.message);
+  }
 };
 
 
