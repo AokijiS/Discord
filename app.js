@@ -284,7 +284,6 @@ $("#message-form").addEventListener("submit", async (e) => {
 
   if (!text) return;
 
-  sendBtn.disabled = true;
   setTimeout(() => sendBtn.disabled = false, 400);
 
   try {
