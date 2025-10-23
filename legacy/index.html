@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat Ultra – Salons publics et privés</title>
+
+  <!-- 💡 Tailwind local fallback (CDN moderne non compatible iOS9) -->
+  <link rel="stylesheet" href="https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css">
+
+  <style>
+    /* Mode sombre manuel (pas de color-scheme supporté) */
+    body { background-color: #18181b; color: #f4f4f5; }
+
+    /* Scrollbars rétro */
+    * { -webkit-overflow-scrolling: touch; }
+    .scroll-thin::-webkit-scrollbar { width: 6px; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 8px; }
+
+    /* Animation simplifiée */
+    @-webkit-keyframes fadeUp { from {opacity:0;-webkit-transform:translateY(5px);} to {opacity:1;-webkit-transform:translateY(0);} }
+    @keyframes fadeUp { from {opacity:0;transform:translateY(5px);} to {opacity:1;transform:translateY(0);} }
+    .fadeUp { -webkit-animation: fadeUp .2s ease-out; animation: fadeUp .2s ease-out; }
+
+    /* Fallback pour le flou (backdrop-blur non supporté) */
+    .bg-zinc-900-opaque { background-color: rgba(24,24,27,0.95); }
+
+    /* Boutons : transition simple */
+    .btn { background-color: #27272a; border-radius: 0.5rem; padding: 0.25rem 0.75rem; }
+    .btn:hover { background-color: #3f3f46; }
+  </style>
+</head>
+<body class="h-screen flex flex-col">
+
+  <header class="border-b border-gray-800 p-3 flex items-center gap-3 bg-zinc-900-opaque">
+    <h1 class="font-semibold text-lg">💬 Chat Ultra</h1>
+    <div id="auth-area" class="ml-auto flex items-center gap-2"></div>
+    <button id="friends-btn" class="relative btn">
+      Amis <span id="badge-requests" class="hidden absolute -top-1 -right-1 text-[10px] bg-red-600 rounded-full px-1">0</span>
+    </button>
+  </header>
+
+  <main class="flex-1 grid grid-cols-12 gap-3 p-3">
+    <aside class="col-span-12 md:col-span-3 border border-gray-800 rounded-2xl p-3 flex flex-col">
+      <div class="flex items-center mb-3">
+        <h2 class="text-sm font-semibold flex-1">Salons</h2>
+        <div class="relative">
+          <button id="new-room-btn" class="text-xs btn">+ Créer</button>
+          <div id="room-popup" class="hidden absolute right-0 mt-1 w-64 bg-gray-900 border border-gray-800 rounded-xl p-3 space-y-2 fadeUp z-50">
+            <input id="room-name" placeholder="Nom du salon" class="w-full text-sm px-2 py-1 rounded bg-gray-800">
+            <label class="flex items-center gap-2 text-xs">
+              <input id="room-private" type="checkbox"> Salon privé
+            </label>
+            <div id="friend-select" class="hidden border border-gray-800 rounded p-2 max-h-32 overflow-auto text-xs space-y-1"></div>
+            <button id="create-room" class="w-full text-xs px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500">Créer</button>
+          </div>
+        </div>
+      </div>
+      <ul id="room-list" class="scroll-thin overflow-auto space-y-1 flex-1"></ul>
+    </aside>
+
+    <section class="col-span-12 md:col-span-9 flex flex-col border border-gray-800 rounded-2xl overflow-hidden">
+      <div class="p-3 border-b border-gray-800 bg-gray-900 flex justify-between">
+        <span>Salon : <b id="current-room">(aucun)</b></span>
+        <span id="room-owner-hint" class="text-xs text-gray-400"></span>
+      </div>
+      <div id="messages" class="flex-1 overflow-auto p-3 bg-black space-y-2 scroll-thin"></div>
+      <form id="message-form" class="p-3 border-t border-gray-800 bg-gray-900 flex gap-2">
+        <textarea id="message-input" rows="1" placeholder="Message..." class="flex-1 bg-gray-800 rounded-xl p-3 resize-none"></textarea>
+        <button id="send-btn" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500" disabled="disabled">Envoyer</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="friends-drawer" class="fixed inset-0 bg-black bg-opacity-40 hidden fadeUp">
+    <div class="absolute right-0 top-0 h-full w-full max-w-md bg-gray-900 border-l border-gray-800 p-4 overflow-auto">
+      <div class="flex items-center mb-3">
+        <h3 class="font-semibold">Amis & demandes</h3>
+        <button id="close-friends" class="ml-auto text-gray-300 hover:text-white">Fermer</button>
+      </div>
+      <section class="mb-4">
+        <h4 class="text-sm font-medium mb-2">Utilisateurs</h4>
+        <ul id="user-list" class="space-y-1 max-h-[40vh] overflow-auto scroll-thin"></ul>
+      </section>
+      <section class="mb-4">
+        <h4 class="text-sm font-medium mb-2">Demandes reçues</h4>
+        <ul id="request-list" class="space-y-1 max-h-[40vh] overflow-auto scroll-thin"></ul>
+      </section>
+      <section>
+        <h4 class="text-sm font-medium mb-2">Mes amis</h4>
+        <ul id="friends-list" class="space-y-1 max-h-[40vh] overflow-auto scroll-thin"></ul>
+      </section>
+    </div>
+  </div>
+
+  <!-- ⚙️ JS rétrocompatible (ES5, sans type="module") -->
+<!-- Polyfills nécessaires sur iOS 9 -->
+<script src="https://cdn.jsdelivr.net/npm/es6-promise@4/dist/es6-promise.auto.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/fetch/2.0.4/fetch.min.js"></script>
+
+<!-- Firebase v8 (compat iOS 9) -->
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+<!-- Ton script ES5 -->
+<script src="./app-es5.js"></script>
+</body>
+</html>

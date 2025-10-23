@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat Ultra – Salons publics et privés</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { scrollbar-width: thin; }
+    .scroll-thin::-webkit-scrollbar { width: 6px; }
+    .scroll-thin::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 8px; }
+    @keyframes fadeUp { from {opacity:0;transform:translateY(5px);} to {opacity:1;transform:translateY(0);} }
+    .fadeUp { animation: fadeUp .2s ease-out; }
+  </style>
+</head>
+<body class="bg-zinc-900 text-zinc-100 h-screen flex flex-col">
+  <header class="border-b border-zinc-800 p-3 flex items-center gap-3 bg-zinc-900/80 backdrop-blur">
+    <h1 class="font-semibold text-lg">💬 Chat Ultra</h1>
+    <div class="ml-auto flex items-center gap-2" id="auth-area"></div>
+    <button id="friends-btn" class="relative px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">
+      Amis <span id="badge-requests" class="hidden absolute -top-1 -right-1 text-[10px] bg-red-600 rounded-full px-1">0</span>
+    </button>
+  </header>
+
+  <main class="grow grid grid-cols-12 gap-3 p-3">
+    <aside class="col-span-12 md:col-span-3 border border-zinc-800 rounded-2xl p-3 flex flex-col">
+      <div class="flex items-center mb-3">
+        <h2 class="text-sm font-semibold flex-1">Salons</h2>
+        <div class="relative">
+          <button id="new-room-btn" class="text-xs px-2 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition">+ Créer</button>
+          <div id="room-popup" class="hidden absolute right-0 mt-1 w-64 bg-zinc-900 border border-zinc-800 rounded-xl p-3 space-y-2 fadeUp z-50">
+            <input id="room-name" placeholder="Nom du salon" class="w-full text-sm px-2 py-1 rounded bg-zinc-800" />
+            <label class="flex items-center gap-2 text-xs">
+              <input id="room-private" type="checkbox" /> Salon privé
+            </label>
+            <div id="friend-select" class="hidden border border-zinc-800 rounded p-2 max-h-32 overflow-auto text-xs space-y-1"></div>
+            <button id="create-room" class="w-full text-xs px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 transition">Créer</button>
+          </div>
+        </div>
+      </div>
+      <ul id="room-list" class="scroll-thin overflow-auto space-y-1 grow"></ul>
+    </aside>
+
+    <section class="col-span-12 md:col-span-9 flex flex-col border border-zinc-800 rounded-2xl overflow-hidden">
+      <div class="p-3 border-b border-zinc-800 bg-zinc-900 flex justify-between">
+        <span>Salon : <b id="current-room">(aucun)</b></span>
+        <span id="room-owner-hint" class="text-xs text-zinc-400"></span>
+      </div>
+      <div id="messages" class="flex-1 overflow-auto p-3 bg-zinc-950 space-y-2 scroll-thin"></div>
+      <form id="message-form" class="p-3 border-t border-zinc-800 bg-zinc-900 flex gap-2">
+        <textarea id="message-input" rows="1" placeholder="Message..." class="flex-1 bg-zinc-800 rounded-xl p-3 resize-none focus:ring-2 focus:ring-indigo-500"></textarea>
+        <button id="send-btn" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 transition">Envoyer</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="friends-drawer" class="fixed inset-0 bg-black/40 hidden fadeUp">
+    <div class="absolute right-0 top-0 h-full w-full max-w-md bg-zinc-900 border-l border-zinc-800 p-4 overflow-auto">
+      <div class="flex items-center mb-3">
+        <h3 class="font-semibold">Amis & demandes</h3>
+        <button id="close-friends" class="ml-auto text-zinc-300 hover:text-white">Fermer</button>
+      </div>
+      <section class="mb-4">
+        <h4 class="text-sm font-medium mb-2">Utilisateurs</h4>
+        <ul id="user-list" class="space-y-1 max-h-[40vh] overflow-auto scroll-thin"></ul>
+      </section>
+      <section class="mb-4">
+        <h4 class="text-sm font-medium mb-2">Demandes reçues</h4>
+        <ul id="request-list" class="space-y-1 max-h-[40vh] overflow-auto scroll-thin"></ul>
+      </section>
+      <section>
+        <h4 class="text-sm font-medium mb-2">Mes amis</h4>
+        <ul id="friends-list" class="space-y-1 max-h-[40vh] overflow-auto scroll-thin"></ul>
+      </section>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
